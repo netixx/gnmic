@@ -2,17 +2,17 @@ package redis_locker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
-	"github.com/google/uuid"
 	"github.com/openconfig/gnmic/lockers"
 	"github.com/openconfig/gnmic/utils"
 	goredislib "github.com/redis/go-redis/v9"
@@ -82,8 +82,6 @@ func (k *redisLocker) Init(ctx context.Context, cfg map[string]interface{}, opts
 		return fmt.Errorf("cannot contact redis server: %w", err)
 	}
 	k.redisLocker = redsync.New(goredis.NewPool(k.client))
-
-	// k.identity = k.getIdentity()
 	return nil
 }
 
@@ -94,7 +92,11 @@ func (k *redisLocker) Lock(ctx context.Context, key string, val []byte) (bool, e
 	mu := k.redisLocker.NewMutex(
 		key,
 		redsync.WithGenValueFunc(func() (string, error) {
-			return string(val), nil
+			rand, err := k.genRandValue()
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s-%s", val, rand), nil
 		}),
 		redsync.WithExpiry(k.Cfg.LeaseDuration),
 	)
@@ -265,10 +267,14 @@ func (k *redisLocker) String() string {
 // 	return 0
 // }
 
-func (l *redisLocker) getIdentity() string {
-	name, err := os.Hostname()
+// genRandValue is required to generate a random value
+// so that the redislock algorithm works properly
+// especially in multi-server setups.
+func (k *redisLocker) genRandValue() (string, error) {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
 	if err != nil {
-		return uuid.NewString()
+		return "", err
 	}
-	return name
+	return base64.StdEncoding.EncodeToString(b), nil
 }

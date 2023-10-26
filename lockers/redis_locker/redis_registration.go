@@ -1,6 +1,7 @@
 package redis_locker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,7 @@ type redisRegistration struct {
 	Address string
 	Port    int
 	Tags    []string
+	Rand    string
 }
 
 func (k *redisLocker) Register(ctx context.Context, s *lockers.ServiceRegistration) error {
@@ -35,11 +37,16 @@ func (k *redisLocker) Register(ctx context.Context, s *lockers.ServiceRegistrati
 	mutex := k.redisLocker.NewMutex(
 		fmt.Sprintf("%s-%s", s.Name, s.ID),
 		redsync.WithGenValueFunc(func() (string, error) {
+			rand, err := k.genRandValue()
+			if err != nil {
+				return "", err
+			}
 			reg := &redisRegistration{
 				ID:      s.ID,
 				Address: s.Address,
 				Port:    s.Port,
 				Tags:    s.Tags,
+				Rand:    rand,
 			}
 			val, err := json.Marshal(reg)
 			if err != nil {
@@ -264,7 +271,13 @@ func (k *redisLocker) List(ctx context.Context, prefix string) (map[string]strin
 					// doesn't make a difference, we skip it
 					continue
 				}
-				data[key] = string(bytesVal)
+				// we add a random string at the end of the value for redis
+				// redlock algorithm, so we need to remove it here
+				lastIndex := bytes.LastIndex(bytesVal, []byte("-"))
+				if lastIndex < 0 {
+					continue
+				}
+				data[key] = string(bytesVal[:lastIndex])
 			}
 
 			if cursor == 0 {
