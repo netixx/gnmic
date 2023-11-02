@@ -137,8 +137,9 @@ func (k *redisLocker) getBatchOfKeys(ctx context.Context, key string, batchSize 
 		key,
 		batchSize,
 	).Result()
+
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to scan redis keys: %w", err)
+		return 0, nil, fmt.Errorf("failed to scan keys: %w", err)
 	}
 
 	results := map[string]*goredis.StringCmd{}
@@ -150,8 +151,9 @@ func (k *redisLocker) getBatchOfKeys(ctx context.Context, key string, batchSize 
 	})
 
 	if err != nil {
-		return cursor, nil, fmt.Errorf("error getting keys")
+		return cursor, nil, fmt.Errorf("error getting contents of keys")
 	}
+
 	return cursor, results, nil
 }
 
@@ -247,42 +249,50 @@ func (k *redisLocker) List(ctx context.Context, prefix string) (map[string]strin
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
-			cursor, cmds, err = k.getBatchOfKeys(
-				ctx,
-				fmt.Sprintf("%s*", prefix),
-				100,
-				cursor,
+		}
+		cursor, cmds, err = k.getBatchOfKeys(
+			ctx,
+			fmt.Sprintf("%s*", prefix),
+			100,
+			cursor,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch from redis: %w", err)
+		}
+		if k.Cfg.Debug {
+			k.logger.Printf(
+				"got %d keys from redis for prefix=%s",
+				len(cmds),
+				prefix,
 			)
+		}
+		for key, cmd := range cmds {
+			bytesVal, err := cmd.Bytes()
 			if err != nil {
-				return nil, err
+				// key removed from redis
+				// could be that it has expired
+				// doesn't make a difference, we skip it
+				continue
 			}
-			if k.Cfg.Debug {
-				k.logger.Printf(
-					"got %d keys from redis for prefix=%s",
-					len(cmds),
-					prefix,
-				)
+			// we add a random string at the end of the value for redis
+			// redlock algorithm, so we need to remove it here
+			lastIndex := bytes.LastIndex(bytesVal, []byte("-"))
+			// if it's not there, we skip the key
+			if lastIndex < 0 {
+				continue
 			}
-			for key, cmd := range cmds {
-				bytesVal, err := cmd.Bytes()
-				if err != nil {
-					// key removed from redis
-					// could be that it has expired
-					// doesn't make a difference, we skip it
-					continue
-				}
-				// we add a random string at the end of the value for redis
-				// redlock algorithm, so we need to remove it here
-				lastIndex := bytes.LastIndex(bytesVal, []byte("-"))
-				if lastIndex < 0 {
-					continue
-				}
-				data[key] = string(bytesVal[:lastIndex])
-			}
+			data[key] = string(bytesVal[:lastIndex])
+		}
 
-			if cursor == 0 {
-				return data, nil
-			}
+		if k.Cfg.Debug {
+			k.logger.Printf(
+				"cursor is %d for prefix=%s",
+				cursor,
+				prefix,
+			)
+		}
+		if cursor == 0 {
+			return data, nil
 		}
 	}
 }

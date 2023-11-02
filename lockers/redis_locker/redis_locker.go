@@ -116,8 +116,17 @@ func (k *redisLocker) Lock(ctx context.Context, key string, val []byte) (bool, e
 		default:
 			err := mu.LockContext(ctx)
 			if err != nil {
-				return false, fmt.Errorf("failed to acquire lock=%s: %w", key, err)
+				switch err.(type) {
+				case *redsync.ErrTaken:
+					if k.Cfg.Debug {
+						k.logger.Printf("lock already taken lock=%s: %v", key, err)
+					}
+					return false, nil
+				default:
+					return false, fmt.Errorf("failed to acquire lock=%s: %w", key, err)
+				}
 			}
+
 			k.m.Lock()
 			k.acquiredLocks[key] = mu
 			k.m.Unlock()
