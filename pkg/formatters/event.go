@@ -251,7 +251,7 @@ func getValueFlat(prefix string, updValue *gnmi.TypedValue) (map[string]interfac
 		var value interface{}
 		err := json.Unmarshal(jsondata, &value)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse json %s: %w", jsondata, err)
 		}
 		switch value := value.(type) {
 		case map[string]interface{}:
